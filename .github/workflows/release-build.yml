@@ -1,0 +1,103 @@
+name: Release builds
+
+on:
+  push:
+    tags:
+      - 'release*'
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS x86_64
+            runner: macos-13
+            target: x86_64-apple-darwin
+            artifact: dedux-macos-x86_64
+            artifact_path: target/x86_64-apple-darwin/release/dedux
+          - name: macOS arm64
+            runner: macos-14
+            target: aarch64-apple-darwin
+            artifact: dedux-macos-arm64
+            artifact_path: target/aarch64-apple-darwin/release/dedux
+          - name: Linux x86_64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: dedux-linux-x86_64
+            artifact_path: target/x86_64-unknown-linux-gnu/release/dedux
+          - name: Windows x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: dedux-windows-x86_64
+            artifact_path: target/x86_64-pc-windows-msvc/release/dedux.exe
+          - name: Windows arm64
+            runner: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact: dedux-windows-arm64
+            artifact_path: target/aarch64-pc-windows-msvc/release/dedux.exe
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
+
+  release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Derive version from tag
+        id: version
+        run: |
+          ref="${GITHUB_REF_NAME}"
+          version="${ref#release}"
+          case "$version" in
+            -*) version="${version#-}" ;;
+            _*) version="${version#_}" ;;
+            /*) version="${version#/}" ;;
+          esac
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Package binaries
+        run: |
+          mkdir -p release
+          for dir in dist/*; do
+            [ -d "$dir" ] || continue
+            name="$(basename "$dir")"
+            version="${{ steps.version.outputs.value }}"
+            if [[ "$name" == *windows* ]]; then
+              zip -j "release/dedux-${version}-${name}.zip" "$dir"/*
+            else
+              tar -czf "release/dedux-${version}-${name}.tar.gz" -C "$dir" .
+            fi
+          done
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Dedux ${{ steps.version.outputs.value }}
+          files: release/*
+          generate_release_notes: true
