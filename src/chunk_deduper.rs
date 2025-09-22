@@ -21,9 +21,11 @@ use crate::telemetry::{Telemetry, format_bytes};
 
 const ENTRY_OVERHEAD_BYTES: usize = 48;
 const MIN_LINE_SIZE_HINT: usize = 16;
-const LINE_CHANNEL_CAPACITY: usize = 8192;
+const BATCH_CHANNEL_CAPACITY: usize = 256;
 const LINE_PROGRESS_INTERVAL: u64 = 1_000_000;
 const SEGMENT_PROGRESS_INTERVAL: usize = 25;
+const SHARD_BATCH_TARGET_LINES: usize = 256;
+const SHARD_BATCH_TARGET_BYTES: usize = 256 * 1024;
 
 /// Metadata describing an on-disk sorted segment of unique lines.
 #[derive(Debug, Clone)]
@@ -81,11 +83,11 @@ pub fn build_segments(
     let shard_hasher = RandomState::new();
 
     thread::scope(|scope| -> Result<()> {
-        let mut senders: Vec<Sender<(u64, Box<[u8]>)>> = Vec::with_capacity(worker_threads);
+        let mut senders: Vec<Sender<Vec<(u64, Box<[u8]>)>>> = Vec::with_capacity(worker_threads);
         let mut handles = Vec::with_capacity(worker_threads);
 
         for _ in 0..worker_threads {
-            let (tx, rx) = bounded::<(u64, Box<[u8]>)>(LINE_CHANNEL_CAPACITY);
+            let (tx, rx) = bounded::<Vec<(u64, Box<[u8]>)>>(BATCH_CHANNEL_CAPACITY);
             senders.push(tx);
             let segments_dir = segments_dir.to_path_buf();
             let segment_counter = Arc::clone(&segment_counter);
@@ -101,6 +103,11 @@ pub fn build_segments(
                 )
             }));
         }
+
+        let mut shard_batches: Vec<Vec<(u64, Box<[u8]>)>> = (0..worker_threads)
+            .map(|_| Vec::with_capacity(SHARD_BATCH_TARGET_LINES))
+            .collect();
+        let mut shard_batch_bytes = vec![0usize; worker_threads];
 
         reader.consume_lines(|line| -> Result<()> {
             if config.skip_empty && line.is_empty() {
@@ -120,13 +127,40 @@ pub fn build_segments(
                 (hash as usize) % worker_threads
             };
             let boxed: Box<[u8]> = line.to_owned().into_boxed_slice();
-            senders
-                .get(shard_index)
-                .expect("shard index out of range")
-                .send((hash, boxed))
-                .map_err(|_| anyhow!("worker thread {shard_index} terminated prematurely"))?;
+            let batch = &mut shard_batches[shard_index];
+            batch.push((hash, boxed));
+            let batch_bytes = &mut shard_batch_bytes[shard_index];
+            *batch_bytes = batch_bytes.saturating_add(line.len());
+
+            if batch.len() >= SHARD_BATCH_TARGET_LINES || *batch_bytes >= SHARD_BATCH_TARGET_BYTES {
+                let mut to_send = Vec::with_capacity(batch.len());
+                to_send.extend(batch.drain(..));
+                *batch_bytes = 0;
+                senders
+                    .get(shard_index)
+                    .expect("shard index out of range")
+                    .send(to_send)
+                    .map_err(|_| anyhow!("worker thread {shard_index} terminated prematurely"))?;
+            }
             Ok(())
         })?;
+
+        for (shard_index, (batch, bytes)) in shard_batches
+            .iter_mut()
+            .zip(shard_batch_bytes.iter_mut())
+            .enumerate()
+        {
+            if !batch.is_empty() {
+                let mut to_send = Vec::with_capacity(batch.len());
+                to_send.extend(batch.drain(..));
+                *bytes = 0;
+                senders
+                    .get(shard_index)
+                    .expect("shard index out of range")
+                    .send(to_send)
+                    .map_err(|_| anyhow!("worker thread {shard_index} terminated prematurely"))?;
+            }
+        }
 
         drop(senders);
 
@@ -154,7 +188,7 @@ pub fn build_segments(
 /// Consume lines for a single shard, flushing to disk when memory thresholds
 /// are reached.
 fn worker_loop(
-    receiver: Receiver<(u64, Box<[u8]>)>,
+    receiver: Receiver<Vec<(u64, Box<[u8]>)>>,
     segments_dir: PathBuf,
     segment_counter: Arc<AtomicUsize>,
     chunk_memory_limit: usize,
@@ -166,19 +200,21 @@ fn worker_loop(
     let mut unique_lines = 0u64;
     let mut bytes_written = 0u64;
 
-    while let Ok((hash, line)) = receiver.recv() {
-        if chunk.insert_boxed(hash, line) {
-            unique_lines += 1;
-        }
-        if chunk.should_flush() {
-            let segment_id = segment_counter.fetch_add(1, Ordering::Relaxed);
-            if let Some(segment) =
-                flush_chunk(&mut chunk, segment_id, &segments_dir, segment_buffer_bytes)?
-            {
-                bytes_written += segment.bytes;
-                let latest_bytes = segment.bytes;
-                segments.push(segment);
-                log_segment_progress(&telemetry, segment_id + 1, latest_bytes);
+    while let Ok(batch) = receiver.recv() {
+        for (hash, line) in batch {
+            if chunk.insert_boxed(hash, line) {
+                unique_lines += 1;
+            }
+            if chunk.should_flush() {
+                let segment_id = segment_counter.fetch_add(1, Ordering::Relaxed);
+                if let Some(segment) =
+                    flush_chunk(&mut chunk, segment_id, &segments_dir, segment_buffer_bytes)?
+                {
+                    bytes_written += segment.bytes;
+                    let latest_bytes = segment.bytes;
+                    segments.push(segment);
+                    log_segment_progress(&telemetry, segment_id + 1, latest_bytes);
+                }
             }
         }
     }
