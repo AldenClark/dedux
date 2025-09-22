@@ -8,6 +8,7 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use rayon::prelude::*;
 
 use crate::chunk_deduper::Segment;
 use crate::telemetry::Telemetry;
@@ -67,27 +68,36 @@ pub fn merge_segments(
     let mut pass = 0usize;
 
     while current.len() > max_fan_in {
-        let mut next_round = Vec::new();
         // Clone into owned batches to release files after each merge.
-        let batches: Vec<Vec<Segment>> = current
+        let batches: Vec<(usize, Vec<Segment>)> = current
             .chunks(max_fan_in)
-            .map(|chunk| chunk.to_vec())
+            .enumerate()
+            .map(|(chunk_idx, chunk)| (chunk_idx, chunk.to_vec()))
             .collect();
 
-        for (chunk_idx, batch) in batches.into_iter().enumerate() {
-            let temp_path =
-                scratch_dir.join(format!("merge_pass{:02}_chunk{:04}.run", pass, chunk_idx));
-            let stats = merge_into_path(&batch, &temp_path, buffer_bytes, telemetry, false)?;
-            let merged_segment = Segment {
-                path: temp_path,
-                bytes: stats.total_bytes,
-            };
-            next_round.push(merged_segment.clone());
+        let mut merged_segments = batches
+            .into_par_iter()
+            .map(|(chunk_idx, batch)| -> Result<(usize, Segment)> {
+                let temp_path =
+                    scratch_dir.join(format!("merge_pass{:02}_chunk{:04}.run", pass, chunk_idx));
+                let stats = merge_into_path(&batch, &temp_path, buffer_bytes, telemetry, false)?;
+                let merged_segment = Segment {
+                    path: temp_path,
+                    bytes: stats.total_bytes,
+                };
 
-            for segment in batch {
-                let _ = fs::remove_file(&segment.path);
-            }
-        }
+                for segment in batch {
+                    let _ = fs::remove_file(&segment.path);
+                }
+
+                Ok((chunk_idx, merged_segment))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        merged_segments.sort_by_key(|(chunk_idx, _)| *chunk_idx);
+
+        let mut next_round = Vec::with_capacity(merged_segments.len());
+        next_round.extend(merged_segments.into_iter().map(|(_, segment)| segment));
 
         current = next_round;
         pass += 1;
