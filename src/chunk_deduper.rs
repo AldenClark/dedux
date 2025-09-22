@@ -13,7 +13,7 @@ use std::thread;
 use ahash::RandomState;
 use anyhow::{Context, Result, anyhow};
 use crossbeam_channel::{Receiver, Sender, bounded};
-use hashbrown::HashSet;
+use hashbrown::HashTable;
 
 use crate::config::PipelineConfig;
 use crate::io_reader::FileLineReader;
@@ -81,11 +81,11 @@ pub fn build_segments(
     let shard_hasher = RandomState::new();
 
     thread::scope(|scope| -> Result<()> {
-        let mut senders: Vec<Sender<Box<[u8]>>> = Vec::with_capacity(worker_threads);
+        let mut senders: Vec<Sender<(u64, Box<[u8]>)>> = Vec::with_capacity(worker_threads);
         let mut handles = Vec::with_capacity(worker_threads);
 
         for _ in 0..worker_threads {
-            let (tx, rx) = bounded::<Box<[u8]>>(LINE_CHANNEL_CAPACITY);
+            let (tx, rx) = bounded::<(u64, Box<[u8]>)>(LINE_CHANNEL_CAPACITY);
             senders.push(tx);
             let segments_dir = segments_dir.to_path_buf();
             let segment_counter = Arc::clone(&segment_counter);
@@ -111,18 +111,19 @@ pub fn build_segments(
                 telemetry.progress(&format!("Processed {total_input_lines} input lines so far"));
                 next_line_progress = next_line_progress.saturating_add(LINE_PROGRESS_INTERVAL);
             }
+            let mut hasher = shard_hasher.build_hasher();
+            line.hash(&mut hasher);
+            let hash = hasher.finish();
             let shard_index = if worker_threads == 1 {
                 0
             } else {
-                let mut hasher = shard_hasher.build_hasher();
-                line.hash(&mut hasher);
-                (hasher.finish() as usize) % worker_threads
+                (hash as usize) % worker_threads
             };
             let boxed: Box<[u8]> = line.to_owned().into_boxed_slice();
             senders
                 .get(shard_index)
                 .expect("shard index out of range")
-                .send(boxed)
+                .send((hash, boxed))
                 .map_err(|_| anyhow!("worker thread {shard_index} terminated prematurely"))?;
             Ok(())
         })?;
@@ -153,7 +154,7 @@ pub fn build_segments(
 /// Consume lines for a single shard, flushing to disk when memory thresholds
 /// are reached.
 fn worker_loop(
-    receiver: Receiver<Box<[u8]>>,
+    receiver: Receiver<(u64, Box<[u8]>)>,
     segments_dir: PathBuf,
     segment_counter: Arc<AtomicUsize>,
     chunk_memory_limit: usize,
@@ -165,8 +166,8 @@ fn worker_loop(
     let mut unique_lines = 0u64;
     let mut bytes_written = 0u64;
 
-    while let Ok(line) = receiver.recv() {
-        if chunk.insert_boxed(line) {
+    while let Ok((hash, line)) = receiver.recv() {
+        if chunk.insert_boxed(hash, line) {
             unique_lines += 1;
         }
         if chunk.should_flush() {
@@ -250,13 +251,42 @@ fn flush_chunk(
     }))
 }
 
-/// Tracks the dedupe state for a worker shard using a hash set plus rough
+/// Tracks the dedupe state for a worker shard using a hash table plus rough
 /// memory accounting.
 struct ChunkState {
-    set: HashSet<Box<[u8]>, RandomState>,
+    table: HashTable<HashedLine>,
     unique_bytes: usize,
     limit_bytes: usize,
     limit_entries: usize,
+}
+
+struct HashedLine {
+    hash: u64,
+    bytes: Box<[u8]>,
+}
+
+impl HashedLine {
+    fn new(hash: u64, bytes: Box<[u8]>) -> Self {
+        Self { hash, bytes }
+    }
+
+    fn into_bytes(self) -> Box<[u8]> {
+        self.bytes
+    }
+}
+
+impl PartialEq for HashedLine {
+    fn eq(&self, other: &Self) -> bool {
+        self.bytes.as_ref() == other.bytes.as_ref()
+    }
+}
+
+impl Eq for HashedLine {}
+
+impl Hash for HashedLine {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.hash);
+    }
 }
 
 impl ChunkState {
@@ -271,7 +301,7 @@ impl ChunkState {
             (limit_bytes, entries)
         };
         Self {
-            set: HashSet::with_hasher(RandomState::new()),
+            table: HashTable::new(),
             unique_bytes: 0,
             limit_bytes,
             limit_entries,
@@ -279,34 +309,43 @@ impl ChunkState {
     }
 
     /// Track a line in the chunk, returning whether it was new data.
-    fn insert_boxed(&mut self, line: Box<[u8]>) -> bool {
+    fn insert_boxed(&mut self, hash: u64, line: Box<[u8]>) -> bool {
         let len = line.len();
-        if self.set.insert(line) {
-            self.unique_bytes = self.unique_bytes.saturating_add(len + ENTRY_OVERHEAD_BYTES);
-            true
-        } else {
-            false
+        let line_slice = line.as_ref();
+        if self
+            .table
+            .find(hash, |existing| existing.bytes.as_ref() == line_slice)
+            .is_some()
+        {
+            return false;
         }
+
+        let hashed_line = HashedLine::new(hash, line);
+        self.table
+            .insert_unique(hash, hashed_line, |entry| entry.hash);
+        self.unique_bytes = self.unique_bytes.saturating_add(len + ENTRY_OVERHEAD_BYTES);
+        true
     }
 
     /// Check whether the chunk exceeded either its byte or entry thresholds.
     fn should_flush(&self) -> bool {
-        if self.set.is_empty() {
+        if self.table.is_empty() {
             return false;
         }
         let bytes_full = self.limit_bytes != usize::MAX && self.unique_bytes >= self.limit_bytes;
-        let entries_full = self.limit_entries != usize::MAX && self.set.len() >= self.limit_entries;
+        let entries_full =
+            self.limit_entries != usize::MAX && self.table.len() >= self.limit_entries;
         bytes_full || entries_full
     }
 
     /// Determine whether the chunk still contains data.
     fn has_data(&self) -> bool {
-        !self.set.is_empty()
+        !self.table.is_empty()
     }
 
     /// Drain all values from the chunk in lexically sorted order.
     fn drain_sorted(&mut self) -> Vec<Box<[u8]>> {
-        let mut values: Vec<Box<[u8]>> = self.set.drain().collect();
+        let mut values: Vec<Box<[u8]>> = self.table.drain().map(HashedLine::into_bytes).collect();
         values.sort_unstable_by(|a, b| a.as_ref().cmp(b.as_ref()));
         self.unique_bytes = 0;
         values
