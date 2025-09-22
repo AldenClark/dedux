@@ -1,0 +1,21 @@
+[package]
+name = "dedux"
+version = "0.1.0"
+edition = "2024"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[dependencies]
+ahash = "^0.8"
+anyhow = "^1.0"
+clap = { version = "^4.5", features = ["derive"] }
+hashbrown = "^0.16"
+memchr = "^2.7"
+crossbeam-channel = "^0.5"
+num_cpus = "^1.16"
+libc = "^0.2"
+rand = "^0.9"
