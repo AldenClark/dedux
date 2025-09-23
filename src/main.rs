@@ -1,24 +1,14 @@
 //! CLI entry point that orchestrates the chunk build and merge stages for
 //! large-scale text deduplication.
 
-mod chunk_deduper;
-mod config;
-mod io_reader;
-mod merge;
-mod telemetry;
-
-#[cfg(test)]
-mod test_utils;
-
 use anyhow::{Context, Result, anyhow};
-use chunk_deduper::{ChunkBuildStats, Segment, build_segments};
 use clap::Parser;
-use config::{Cli, PipelineConfig};
+use dedux::chunk_deduper::{ChunkBuildStats, Segment, build_segments};
+use dedux::config::{Cli, PipelineConfig};
+use dedux::merge::{MergeStats, merge_segments};
+use dedux::telemetry::{Telemetry, format_bytes};
 use std::fs;
 use std::path::{Path, PathBuf};
-use telemetry::{Telemetry, format_bytes};
-
-use crate::merge::{MergeStats, merge_segments};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();

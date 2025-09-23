@@ -6,7 +6,7 @@ use rand::Rng;
 use rand::distr::{Alphanumeric, Distribution, SampleString, Uniform};
 use rand::seq::SliceRandom;
 
-const SHORT_LENGTH_CEILING: usize = 16;
+pub const SHORT_LENGTH_CEILING: usize = 16;
 const MAX_LENGTH: usize = 128;
 const SHORT_FRACTION: f64 = 0.90;
 
@@ -133,58 +133,4 @@ fn generate_lines<R: Rng + ?Sized>(
         lines.push(Alphanumeric.sample_string(rng, len).into_bytes());
     }
     lines
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rand::SeedableRng;
-    use rand::rngs::StdRng;
-
-    #[test]
-    fn generates_expected_distribution() {
-        let mut rng = StdRng::seed_from_u64(42);
-        let lines = generate_random_password_lines_with_rng(&mut rng, 1000, 4..=128);
-        assert_eq!(lines.len(), 1000);
-        let short_count = lines
-            .iter()
-            .filter(|line| line.len() <= SHORT_LENGTH_CEILING)
-            .count();
-        assert!(short_count >= 900);
-        assert!(
-            lines
-                .iter()
-                .all(|line| line.len() >= 4 && line.len() <= 128)
-        );
-    }
-
-    #[test]
-    fn respects_all_short_range() {
-        let mut rng = StdRng::seed_from_u64(7);
-        let lines = generate_random_password_lines_with_rng(&mut rng, 64, 1..=8);
-        assert!(lines.iter().all(|line| line.len() <= 8));
-    }
-
-    #[test]
-    fn handles_ranges_without_short_lengths() {
-        let mut rng = StdRng::seed_from_u64(13);
-        let lines = generate_random_password_lines_with_rng(&mut rng, 32, 20..=40);
-        assert!(
-            lines
-                .iter()
-                .all(|line| line.len() >= 20 && line.len() <= 40)
-        );
-        let short_count = lines
-            .iter()
-            .filter(|line| line.len() <= SHORT_LENGTH_CEILING)
-            .count();
-        assert_eq!(short_count, 0);
-    }
-
-    #[test]
-    fn supports_thread_rng_helper() {
-        let lines = generate_random_password_lines(16, 1..=32);
-        assert_eq!(lines.len(), 16);
-        assert!(lines.iter().all(|line| line.len() >= 1 && line.len() <= 32));
-    }
 }

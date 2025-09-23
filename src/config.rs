@@ -215,30 +215,3 @@ fn gb_to_bytes(value: usize) -> Result<usize> {
         .checked_mul(1024 * 1024 * 1024)
         .ok_or_else(|| anyhow!("value too large: {} GB", value))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::default_output_file_name;
-    use std::path::Path;
-
-    #[test]
-    fn default_output_keeps_extension() {
-        let input = Path::new("/tmp/example.txt");
-        let output = default_output_file_name(input);
-        assert_eq!(output, Path::new("example.deduped.txt"));
-    }
-
-    #[test]
-    fn default_output_handles_multi_part_extensions() {
-        let input = Path::new("/tmp/archive.tar.gz");
-        let output = default_output_file_name(input);
-        assert_eq!(output, Path::new("archive.tar.deduped.gz"));
-    }
-
-    #[test]
-    fn default_output_without_extension() {
-        let input = Path::new("/tmp/data");
-        let output = default_output_file_name(input);
-        assert_eq!(output, Path::new("data.deduped"));
-    }
-}
