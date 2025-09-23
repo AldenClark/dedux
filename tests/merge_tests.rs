@@ -16,10 +16,7 @@ mod utils;
 fn unique_temp_dir() -> PathBuf {
     let base = std::env::temp_dir();
     let pid = std::process::id();
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     base.join(format!("dedux_merge_test_{pid}_{ts}"))
 }
 
@@ -81,10 +78,7 @@ fn merge_segments_handles_randomized_overlap() {
 
     let mut rng = StdRng::seed_from_u64(12345);
     let dataset = generate_random_password_lines_with_rng(&mut rng, 24_000, 8..=32);
-    let as_strings: Vec<String> = dataset
-        .into_iter()
-        .map(|line| String::from_utf8(line).unwrap())
-        .collect();
+    let as_strings: Vec<String> = dataset.into_iter().map(|line| String::from_utf8(line).unwrap()).collect();
 
     let segments_specs: Vec<Vec<String>> = vec![
         as_strings[0..120].to_vec(),
@@ -93,9 +87,11 @@ fn merge_segments_handles_randomized_overlap() {
     ];
 
     let mut segments = Vec::new();
+    let mut expected = BTreeSet::new();
     for (idx, mut lines) in segments_specs.into_iter().enumerate() {
         lines.sort();
         lines.dedup();
+        expected.extend(lines.iter().cloned());
 
         let path = temp_dir.join(format!("random_segment_{idx:02}.run"));
         let mut file = File::create(&path).unwrap();
@@ -115,10 +111,6 @@ fn merge_segments_handles_randomized_overlap() {
         .map(|line| line.to_string())
         .collect();
 
-    let mut expected = BTreeSet::new();
-    for line in as_strings {
-        expected.insert(line);
-    }
     let expected: Vec<String> = expected.into_iter().collect();
 
     assert_eq!(merged_lines, expected);

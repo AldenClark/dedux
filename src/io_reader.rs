@@ -19,8 +19,7 @@ pub struct FileLineReader {
 impl FileLineReader {
     /// Open a file for buffered line-by-line reading.
     pub fn open(path: &Path, buffer_size: usize, trim_crlf: bool) -> Result<Self> {
-        let file = File::open(path)
-            .with_context(|| format!("failed to open file for reading: {}", path.display()))?;
+        let file = File::open(path).with_context(|| format!("failed to open file for reading: {}", path.display()))?;
         Ok(Self {
             reader: BufReader::with_capacity(buffer_size, file),
             carry: Vec::with_capacity(8192),

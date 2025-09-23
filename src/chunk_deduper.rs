@@ -52,17 +52,8 @@ struct WorkerStats {
 
 /// Stream the input, dispatch work to shard workers, and materialize sorted
 /// segment files containing unique lines.
-pub fn build_segments(
-    config: &PipelineConfig,
-    segments_dir: &Path,
-    telemetry: &Telemetry,
-) -> Result<(Vec<Segment>, ChunkBuildStats)> {
-    fs::create_dir_all(segments_dir).with_context(|| {
-        format!(
-            "failed to create segment directory: {}",
-            segments_dir.display()
-        )
-    })?;
+pub fn build_segments(config: &PipelineConfig, segments_dir: &Path, telemetry: &Telemetry) -> Result<(Vec<Segment>, ChunkBuildStats)> {
+    fs::create_dir_all(segments_dir).with_context(|| format!("failed to create segment directory: {}", segments_dir.display()))?;
 
     let worker_threads = config.worker_threads.max(1);
     let per_worker_limit = if config.chunk_memory_bytes == 0 {
@@ -71,8 +62,7 @@ pub fn build_segments(
         (config.chunk_memory_bytes / worker_threads).max(ENTRY_OVERHEAD_BYTES + MIN_LINE_SIZE_HINT)
     };
 
-    let mut reader =
-        FileLineReader::open(&config.input, config.read_buffer_bytes, config.trim_crlf)?;
+    let mut reader = FileLineReader::open(&config.input, config.read_buffer_bytes, config.trim_crlf)?;
     let mut total_input_lines = 0u64;
     let mut total_unique_lines = 0u64;
     let mut total_bytes_written = 0u64;
@@ -104,9 +94,8 @@ pub fn build_segments(
             }));
         }
 
-        let mut shard_batches: Vec<Vec<(u64, Box<[u8]>)>> = (0..worker_threads)
-            .map(|_| Vec::with_capacity(SHARD_BATCH_TARGET_LINES))
-            .collect();
+        let mut shard_batches: Vec<Vec<(u64, Box<[u8]>)>> =
+            (0..worker_threads).map(|_| Vec::with_capacity(SHARD_BATCH_TARGET_LINES)).collect();
         let mut shard_batch_bytes = vec![0usize; worker_threads];
 
         reader.consume_lines(|line| -> Result<()> {
@@ -121,11 +110,7 @@ pub fn build_segments(
             let mut hasher = shard_hasher.build_hasher();
             line.hash(&mut hasher);
             let hash = hasher.finish();
-            let shard_index = if worker_threads == 1 {
-                0
-            } else {
-                (hash as usize) % worker_threads
-            };
+            let shard_index = if worker_threads == 1 { 0 } else { (hash as usize) % worker_threads };
             let boxed: Box<[u8]> = line.to_owned().into_boxed_slice();
             let batch = &mut shard_batches[shard_index];
             batch.push((hash, boxed));
@@ -145,11 +130,7 @@ pub fn build_segments(
             Ok(())
         })?;
 
-        for (shard_index, (batch, bytes)) in shard_batches
-            .iter_mut()
-            .zip(shard_batch_bytes.iter_mut())
-            .enumerate()
-        {
+        for (shard_index, (batch, bytes)) in shard_batches.iter_mut().zip(shard_batch_bytes.iter_mut()).enumerate() {
             if !batch.is_empty() {
                 let mut to_send = Vec::with_capacity(batch.len());
                 to_send.extend(batch.drain(..));
@@ -207,9 +188,7 @@ fn worker_loop(
             }
             if chunk.should_flush() {
                 let segment_id = segment_counter.fetch_add(1, Ordering::Relaxed);
-                if let Some(segment) =
-                    flush_chunk(&mut chunk, segment_id, &segments_dir, segment_buffer_bytes)?
-                {
+                if let Some(segment) = flush_chunk(&mut chunk, segment_id, &segments_dir, segment_buffer_bytes)? {
                     bytes_written += segment.bytes;
                     let latest_bytes = segment.bytes;
                     segments.push(segment);
@@ -221,9 +200,7 @@ fn worker_loop(
 
     if chunk.has_data() {
         let segment_id = segment_counter.fetch_add(1, Ordering::Relaxed);
-        if let Some(segment) =
-            flush_chunk(&mut chunk, segment_id, &segments_dir, segment_buffer_bytes)?
-        {
+        if let Some(segment) = flush_chunk(&mut chunk, segment_id, &segments_dir, segment_buffer_bytes)? {
             bytes_written += segment.bytes;
             let latest_bytes = segment.bytes;
             segments.push(segment);
@@ -249,20 +226,14 @@ fn log_segment_progress(telemetry: &Telemetry, segment_number: usize, segment_by
 }
 
 /// Persist the current chunk to disk as a sorted segment file.
-fn flush_chunk(
-    chunk: &mut ChunkState,
-    segment_id: usize,
-    segments_dir: &Path,
-    buffer_bytes: usize,
-) -> Result<Option<Segment>> {
+fn flush_chunk(chunk: &mut ChunkState, segment_id: usize, segments_dir: &Path, buffer_bytes: usize) -> Result<Option<Segment>> {
     let values = chunk.drain_sorted();
     if values.is_empty() {
         return Ok(None);
     }
 
     let path = segments_dir.join(format!("segment_{:08}.run", segment_id));
-    let file = File::create(&path)
-        .with_context(|| format!("failed to create segment file: {}", path.display()))?;
+    let file = File::create(&path).with_context(|| format!("failed to create segment file: {}", path.display()))?;
     let buffer_size = buffer_bytes.max(64 * 1024);
     let mut writer = BufWriter::with_capacity(buffer_size, file);
     let mut bytes_written = 0u64;
@@ -348,17 +319,12 @@ impl ChunkState {
     fn insert_boxed(&mut self, hash: u64, line: Box<[u8]>) -> bool {
         let len = line.len();
         let line_slice = line.as_ref();
-        if self
-            .table
-            .find(hash, |existing| existing.bytes.as_ref() == line_slice)
-            .is_some()
-        {
+        if self.table.find(hash, |existing| existing.bytes.as_ref() == line_slice).is_some() {
             return false;
         }
 
         let hashed_line = HashedLine::new(hash, line);
-        self.table
-            .insert_unique(hash, hashed_line, |entry| entry.hash);
+        self.table.insert_unique(hash, hashed_line, |entry| entry.hash);
         self.unique_bytes = self.unique_bytes.saturating_add(len + ENTRY_OVERHEAD_BYTES);
         true
     }
@@ -369,8 +335,7 @@ impl ChunkState {
             return false;
         }
         let bytes_full = self.limit_bytes != usize::MAX && self.unique_bytes >= self.limit_bytes;
-        let entries_full =
-            self.limit_entries != usize::MAX && self.table.len() >= self.limit_entries;
+        let entries_full = self.limit_entries != usize::MAX && self.table.len() >= self.limit_entries;
         bytes_full || entries_full
     }
 

@@ -11,9 +11,7 @@ pub struct Telemetry {
 impl Telemetry {
     /// Create a new telemetry instance anchored at the current time.
     pub fn new() -> Self {
-        Self {
-            start: Instant::now(),
-        }
+        Self { start: Instant::now() }
     }
 
     /// Record a stage transition message.

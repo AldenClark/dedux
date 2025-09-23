@@ -30,12 +30,7 @@ fn run_pipeline(config: &PipelineConfig) -> Result<()> {
     report_build_stats(&telemetry, &build_stats);
 
     telemetry.stage("Phase 2: merging segments into final output");
-    let merge_stats = merge_segments(
-        &segments,
-        &config.output,
-        config.result_buffer_bytes,
-        &telemetry,
-    )?;
+    let merge_stats = merge_segments(&segments, &config.output, config.result_buffer_bytes, &telemetry)?;
     report_merge_stats(&telemetry, &merge_stats);
 
     cleanup_segments(&segments, &segments_dir);
@@ -53,12 +48,7 @@ fn prepare_tmp_dir(config: &PipelineConfig) -> Result<()> {
             config.tmp_dir.display()
         ));
     }
-    fs::create_dir_all(&config.tmp_dir).with_context(|| {
-        format!(
-            "failed to create temporary directory: {}",
-            config.tmp_dir.display()
-        )
-    })
+    fs::create_dir_all(&config.tmp_dir).with_context(|| format!("failed to create temporary directory: {}", config.tmp_dir.display()))
 }
 
 /// Emit chunk-building statistics once segment construction completes.
@@ -113,10 +103,7 @@ impl Drop for TempDirGuard {
             return;
         }
         if let Err(err) = fs::remove_dir_all(&self.path) {
-            eprintln!(
-                "warning: failed to clean temporary directory {}: {err}",
-                self.path.display()
-            );
+            eprintln!("warning: failed to clean temporary directory {}: {err}", self.path.display());
         }
     }
 }

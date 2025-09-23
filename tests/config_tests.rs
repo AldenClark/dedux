@@ -6,10 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 fn unique_temp_dir() -> PathBuf {
     let base = std::env::temp_dir();
     let pid = std::process::id();
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     base.join(format!("dedux_config_test_{pid}_{ts}"))
 }
 

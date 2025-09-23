@@ -101,10 +101,7 @@ impl PipelineConfig {
         let output_dir = match output {
             Some(dir) => validate_output_directory(dir)?,
             None => {
-                let parent = input
-                    .parent()
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| PathBuf::from("."));
+                let parent = input.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
                 validate_output_directory(parent)?
             }
         };
@@ -123,11 +120,7 @@ impl PipelineConfig {
         let segment_buffer_bytes = mb_to_bytes(segment_buf_mb)?;
         let result_buffer_bytes = mb_to_bytes(output_buf_mb)?;
         let chunk_memory_bytes = gb_to_bytes(chunk_mem_gb)?;
-        let worker_threads = if threads == 0 {
-            num_cpus::get()
-        } else {
-            threads
-        };
+        let worker_threads = if threads == 0 { num_cpus::get() } else { threads };
         if worker_threads == 0 {
             return Err(anyhow!("thread count must be at least 1"));
         }
@@ -152,8 +145,7 @@ impl PipelineConfig {
 /// Ensure the provided output directory exists, is writable, and return its
 /// canonical path.
 fn validate_output_directory(dir: PathBuf) -> Result<PathBuf> {
-    let metadata = fs::metadata(&dir)
-        .with_context(|| format!("output directory does not exist: {}", dir.display()))?;
+    let metadata = fs::metadata(&dir).with_context(|| format!("output directory does not exist: {}", dir.display()))?;
     if !metadata.is_dir() {
         return Err(anyhow!("output path is not a directory: {}", dir.display()));
     }
@@ -174,9 +166,7 @@ fn validate_output_directory(dir: PathBuf) -> Result<PathBuf> {
 /// Construct a default output filename based on the input path, preserving
 /// extensions when possible.
 fn default_output_file_name(input: &Path) -> PathBuf {
-    let stem = input
-        .file_stem()
-        .unwrap_or_else(|| OsStr::new("dedux_output"));
+    let stem = input.file_stem().unwrap_or_else(|| OsStr::new("dedux_output"));
     let mut name: OsString = stem.to_os_string();
     name.push(".deduped");
 
@@ -194,11 +184,7 @@ fn default_output_file_name(input: &Path) -> PathBuf {
 fn default_tmp_dir(output: &Path) -> PathBuf {
     let parent = output.parent().unwrap_or_else(|| Path::new("."));
     let mut rng = rng();
-    let random_suffix: String = (&mut rng)
-        .sample_iter(&Alphanumeric)
-        .take(12)
-        .map(char::from)
-        .collect();
+    let random_suffix: String = (&mut rng).sample_iter(&Alphanumeric).take(12).map(char::from).collect();
     parent.join(format!(".dedux_tmp_{}", random_suffix))
 }
 

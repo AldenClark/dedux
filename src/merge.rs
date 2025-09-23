@@ -31,18 +31,11 @@ pub struct MergeStats {
 
 /// Merge the provided segments into a single deduplicated output file,
 /// performing multi-pass merging when the fan-in must be reduced.
-pub fn merge_segments(
-    segments: &[Segment],
-    output_path: &Path,
-    buffer_bytes: usize,
-    telemetry: &Telemetry,
-) -> Result<MergeStats> {
+pub fn merge_segments(segments: &[Segment], output_path: &Path, buffer_bytes: usize, telemetry: &Telemetry) -> Result<MergeStats> {
     let initial_count = segments.len();
     let max_fan_in = max_merge_fan_in();
 
-    telemetry.progress(&format!(
-        "Preparing to merge {initial_count} segments (fan-in limit {max_fan_in})"
-    ));
+    telemetry.progress(&format!("Preparing to merge {initial_count} segments (fan-in limit {max_fan_in})"));
 
     if initial_count == 0 {
         let mut stats = merge_into_path(segments, output_path, buffer_bytes, telemetry, true)?;
@@ -57,12 +50,7 @@ pub fn merge_segments(
     }
 
     let scratch_dir = determine_scratch_dir(segments, output_path);
-    fs::create_dir_all(&scratch_dir).with_context(|| {
-        format!(
-            "failed to prepare merge scratch directory: {}",
-            scratch_dir.display()
-        )
-    })?;
+    fs::create_dir_all(&scratch_dir).with_context(|| format!("failed to prepare merge scratch directory: {}", scratch_dir.display()))?;
 
     let mut current: Vec<Segment> = segments.to_vec();
     let mut pass = 0usize;
@@ -78,8 +66,7 @@ pub fn merge_segments(
         let mut merged_segments = batches
             .into_par_iter()
             .map(|(chunk_idx, batch)| -> Result<(usize, Segment)> {
-                let temp_path =
-                    scratch_dir.join(format!("merge_pass{:02}_chunk{:04}.run", pass, chunk_idx));
+                let temp_path = scratch_dir.join(format!("merge_pass{:02}_chunk{:04}.run", pass, chunk_idx));
                 let stats = merge_into_path(&batch, &temp_path, buffer_bytes, telemetry, false)?;
                 let merged_segment = Segment {
                     path: temp_path,
@@ -127,12 +114,10 @@ fn merge_into_path(
     emit_progress: bool,
 ) -> Result<MergeStats> {
     if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create output directory: {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("failed to create output directory: {}", parent.display()))?;
     }
 
-    let file = File::create(output_path)
-        .with_context(|| format!("failed to create output file: {}", output_path.display()))?;
+    let file = File::create(output_path).with_context(|| format!("failed to create output file: {}", output_path.display()))?;
     let buffer_size = buffer_bytes.max(64 * 1024);
     let mut writer = BufWriter::with_capacity(buffer_size, file);
 
@@ -185,17 +170,14 @@ fn merge_into_path(
         if !is_duplicate {
             let line_len = line.len();
             line.push(b'\n');
-            writer.write_all(&line).with_context(|| {
-                format!("failed to write output data: {}", output_path.display())
-            })?;
+            writer
+                .write_all(&line)
+                .with_context(|| format!("failed to write output data: {}", output_path.display()))?;
             line.pop();
             total_bytes += (line_len + 1) as u64;
             unique_lines += 1;
             if emit_progress && unique_lines >= next_progress {
-                telemetry.progress(&format!(
-                    "Merged {unique_lines} unique lines into {}",
-                    output_path.display()
-                ));
+                telemetry.progress(&format!("Merged {unique_lines} unique lines into {}", output_path.display()));
                 next_progress = next_progress.saturating_add(MERGE_PROGRESS_LINE_INTERVAL);
             }
 
@@ -216,10 +198,7 @@ fn merge_into_path(
         .with_context(|| format!("failed to flush output file: {}", output_path.display()))?;
 
     if emit_progress && unique_lines > 0 && unique_lines < MERGE_PROGRESS_LINE_INTERVAL {
-        telemetry.progress(&format!(
-            "Merged {unique_lines} unique lines into {}",
-            output_path.display()
-        ));
+        telemetry.progress(&format!("Merged {unique_lines} unique lines into {}", output_path.display()));
     }
 
     Ok(MergeStats {
@@ -252,9 +231,7 @@ fn reader_buffer_size(buffer_bytes: usize, segment_count: usize) -> usize {
 /// Determine the maximum number of files that can be merged concurrently,
 /// reserving headroom for other file descriptors.
 fn max_merge_fan_in() -> usize {
-    let fd_limit = env_max_open_files()
-        .or_else(system_fd_limit)
-        .unwrap_or(DEFAULT_MAX_OPEN_FILES);
+    let fd_limit = env_max_open_files().or_else(system_fd_limit).unwrap_or(DEFAULT_MAX_OPEN_FILES);
     // Leave headroom for other descriptors and the output writer handle.
     let available = fd_limit.saturating_sub(FD_RESERVE);
     let fan_in = available.saturating_sub(1);
@@ -304,8 +281,7 @@ struct SegmentReader {
 impl SegmentReader {
     /// Open a segment for reading with the provided buffer capacity.
     fn open(path: &Path, buffer_bytes: usize) -> Result<Self> {
-        let file = File::open(path)
-            .with_context(|| format!("failed to open segment file: {}", path.display()))?;
+        let file = File::open(path).with_context(|| format!("failed to open segment file: {}", path.display()))?;
         let buffer = BufReader::with_capacity(buffer_bytes, file);
         Ok(Self { reader: buffer })
     }
