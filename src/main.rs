@@ -7,6 +7,9 @@ mod io_reader;
 mod merge;
 mod telemetry;
 
+#[cfg(test)]
+mod test_utils;
+
 use anyhow::{Context, Result, anyhow};
 use chunk_deduper::{ChunkBuildStats, Segment, build_segments};
 use clap::Parser;
